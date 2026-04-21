@@ -108,6 +108,10 @@ ignore = [
   "TRY400",  # logging.exception is not always preferable
 ]
 flake8-quotes = { inline-quotes = "single" }
+flake8-type-checking = { runtime-evaluated-base-classes = [
+  "pydantic.BaseModel",
+  "pydantic_settings.BaseSettings",
+] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
