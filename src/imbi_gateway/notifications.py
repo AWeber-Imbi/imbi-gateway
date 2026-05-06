@@ -56,8 +56,14 @@ class WebhookRule(pydantic.BaseModel):
 
 @router.post('/{webhook_id}', include_in_schema=False)
 async def process_notification(
-    webhook_id: str, *, db: graph.Pool, request: fastapi.Request
+    webhook_id: str,
+    *,
+    db: graph.Pool,
+    request: fastapi.Request,
+    response: fastapi.Response,
 ) -> None:
+    # default to 204 ==> nothing to do
+    response.status_code = http.HTTPStatus.NO_CONTENT
     records = await db.execute(
         'MATCH (w:Webhook {{ id: {webhook_id} }})'
         ' -[:BELONGS_TO]->(o:Organization)'
@@ -124,7 +130,7 @@ async def process_notification(
             # 2. validate each filter
             filter_results = [rule.evaluate_condition(body) for rule in rules]
             if not any(filter_results):
-                LOGGER.info('Ignoring notification: no filter matches')
+                LOGGER.debug('Ignoring notification: no filter matches')
                 return
 
             # 3. execute each enabled handler for each matching project
@@ -156,6 +162,9 @@ async def process_notification(
                     body,
                     handlers,
                 )
+
+            # indicates that we actually did something
+            response.status_code = http.HTTPStatus.ACCEPTED
 
 
 async def _run_handlers(

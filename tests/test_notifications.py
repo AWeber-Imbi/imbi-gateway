@@ -236,7 +236,7 @@ class ProcessNotificationTests(helpers.TestCase):
             'imbi_gateway.notifications', level='WARNING'
         ) as cm:
             response = await self._post(nanoid.generate(), {})
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertEqual([], HANDLER_CALLS)
         self.assertTrue(any('No records found' in line for line in cm.output))
 
@@ -245,7 +245,7 @@ class ProcessNotificationTests(helpers.TestCase):
         # nodes exist
         body = {'repo': {'id': self.ext_id}}
         response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertEqual([], HANDLER_CALLS)
 
     async def test_no_service_global_webhook_not_implemented(self) -> None:
@@ -275,7 +275,7 @@ class ProcessNotificationTests(helpers.TestCase):
                 'imbi_gateway.notifications', level='WARNING'
             ) as cm:
                 response = await self._post(no_tps_webhook_id, {})
-            self.assertEqual(200, response.status_code)
+            self.assertEqual(204, response.status_code)
             self.assertEqual([], HANDLER_CALLS)
             self.assertTrue(
                 any('Global webhooks' in line for line in cm.output)
@@ -290,9 +290,11 @@ class ProcessNotificationTests(helpers.TestCase):
     async def test_all_conditions_false_no_handler_called(self) -> None:
         await self._add_rule(filter_expression='false')
         body = {'repo': {'id': self.ext_id}}
-        with self.assertLogs('imbi_gateway.notifications', level='INFO') as cm:
+        with self.assertLogs(
+            'imbi_gateway.notifications', level='DEBUG'
+        ) as cm:
             response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertEqual([], HANDLER_CALLS)
         self.assertTrue(any('no filter matches' in line for line in cm.output))
 
@@ -300,7 +302,7 @@ class ProcessNotificationTests(helpers.TestCase):
         await self._add_rule(filter_expression='true')
         body = {'repo': {'id': self.ext_id}}
         response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(202, response.status_code)
         self.assertEqual(1, len(HANDLER_CALLS))
         org_slug, project_id, received_body, _ = HANDLER_CALLS[0]
         self.assertEqual(self.org_slug, org_slug)
@@ -333,7 +335,7 @@ class ProcessNotificationTests(helpers.TestCase):
         try:
             body = {'repo': {'id': self.ext_id}}
             response = await self._post(self.webhook_id, body)
-            self.assertEqual(200, response.status_code)
+            self.assertEqual(202, response.status_code)
             self.assertEqual(2, len(HANDLER_CALLS))
             project_ids = {call[1] for call in HANDLER_CALLS}
             self.assertEqual({self.proj_id, second_proj_id}, project_ids)
@@ -351,7 +353,7 @@ class ProcessNotificationTests(helpers.TestCase):
             'imbi_gateway.notifications', level='WARNING'
         ) as cm:
             response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertEqual([], HANDLER_CALLS)
         self.assertTrue(any('no project found' in line for line in cm.output))
 
@@ -362,7 +364,7 @@ class ProcessNotificationTests(helpers.TestCase):
             'imbi_gateway.notifications', level='ERROR'
         ) as cm:
             response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertEqual([], HANDLER_CALLS)
         self.assertTrue(
             any('failed to deserialize rules' in line for line in cm.output)
@@ -374,7 +376,7 @@ class ProcessNotificationTests(helpers.TestCase):
             'imbi_gateway.notifications', level='ERROR'
         ) as cm:
             response = await self._post(self.webhook_id, {})
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(204, response.status_code)
         self.assertTrue(
             any(
                 'failed to select project identifier' in line
@@ -430,7 +432,7 @@ class ProcessNotificationTests(helpers.TestCase):
         self.assertEqual(422, response.status_code)
 
     async def test_handler_exception_is_caught(self) -> None:
-        # Handler raises at dispatch time; exception logged, 200 returned
+        # Handler raises at dispatch time; exception logged, 202 returned
         await self._add_rule(
             handler='tests.test_notifications.raising_stub_handler'
         )
@@ -439,5 +441,5 @@ class ProcessNotificationTests(helpers.TestCase):
             'imbi_gateway.notifications', level='ERROR'
         ) as cm:
             response = await self._post(self.webhook_id, body)
-        self.assertEqual(200, response.status_code)
+        self.assertEqual(202, response.status_code)
         self.assertTrue(any('Failure in' in line for line in cm.output))
