@@ -10,12 +10,14 @@ import jsonpointer
 import pydantic
 from imbi_common import graph
 
+from imbi_gateway import actions
+
 LOGGER = logging.getLogger(__name__)
 
 router = fastapi.APIRouter(prefix='/notifications')
 
 ActionFunction = typing.Callable[
-    [str, str, typing.Any, str], abc.Awaitable[None]
+    [str, str, typing.Any, str | None, str], abc.Awaitable[None]
 ]
 
 
@@ -71,10 +73,13 @@ async def process_notification(
         ' OPTIONAL MATCH (r:WebhookRule)-[:ACTIONS]->(w)'
         ' WITH w, o, tps, i, r ORDER BY r.ordinal'
         ' WITH w, o, tps, i, collect(r{{.*}}) AS rules'
+        ' OPTIONAL MATCH (tps)-[:HAS_PLUGIN]->(plg:Plugin)'
+        ' WITH w, o, tps, i, rules,'
+        '      collect(DISTINCT plg.plugin_slug) AS plugin_slugs'
         ' RETURN w{{.*}} AS webhook, o{{.*}} AS org, tps{{.*}} AS service,'
-        '        i{{.*}} AS sel, rules',
+        '        i{{.*}} AS sel, rules, plugin_slugs',
         {'webhook_id': webhook_id},
-        ['webhook', 'org', 'service', 'sel', 'rules'],
+        ['webhook', 'org', 'service', 'sel', 'rules', 'plugin_slugs'],
     )
     if not records:
         LOGGER.warning('No records found for %r', webhook_id)
@@ -93,6 +98,10 @@ async def process_notification(
         service = graph.parse_agtype(record['service'])  # maybe None
         sel = graph.parse_agtype(record['sel'])  # maybe None
         raw_rules = record['rules']
+        plugin_slugs_raw: list[typing.Any] = (
+            graph.parse_agtype(record['plugin_slugs']) or []
+        )
+        plugin_slugs: list[str] = [str(s) for s in plugin_slugs_raw if s]
 
         try:
             rules = [
@@ -155,11 +164,18 @@ async def process_notification(
                 for rule, enabled in zip(rules, filter_results, strict=True)
                 if enabled
             ]
+            user_id = await _resolve_user_id(
+                body=body,
+                user_subject_selector=sel.get('user_subject_selector'),
+                edge_plugin_slug=sel.get('identity_plugin_slug'),
+                candidate_plugin_slugs=plugin_slugs,
+            )
             for record in records:
                 await _run_handlers(
                     org['slug'],
                     graph.parse_agtype(record['project_id']),
                     body,
+                    user_id,
                     handlers,
                 )
 
@@ -171,16 +187,80 @@ async def _run_handlers(
     org_slug: str,
     project_id: str,
     body: object,
+    user_id: str | None,
     handlers: abc.Iterable[WebhookRule],
 ) -> None:
     LOGGER.debug('Running handlers for %s/%s', org_slug, project_id)
     for rule in handlers:
         try:
-            await rule.handler(org_slug, project_id, body, rule.handler_config)
+            await rule.handler(
+                org_slug, project_id, body, user_id, rule.handler_config
+            )
         except Exception:
             LOGGER.exception(
                 'Failure in %s', rule.handler, extra={'rule': rule}
             )
+
+
+def _extract_subject(
+    body: object, user_subject_selector: str | None
+) -> str | None:
+    if not user_subject_selector:
+        return None
+    try:
+        subject = jsonpointer.JsonPointer(user_subject_selector).resolve(body)
+    except jsonpointer.JsonPointerException:
+        LOGGER.warning(
+            'user_subject_selector %r did not resolve in payload',
+            user_subject_selector,
+        )
+        return None
+    if subject in (None, ''):
+        return None
+    return str(subject)
+
+
+async def _resolve_user_id(
+    *,
+    body: object,
+    user_subject_selector: str | None,
+    edge_plugin_slug: str | None,
+    candidate_plugin_slugs: list[str],
+) -> str | None:
+    """Resolve the Imbi ``user_id`` for a webhook delivery.
+
+    Returns ``None`` when the IMPLEMENTED_BY edge does not declare a
+    ``user_subject_selector``, the selector does not resolve to a value,
+    no identity plugin yields a match, or two or more plugins yield
+    *different* user ids (logged as an error — handler still runs
+    without attribution).
+    """
+    subject = _extract_subject(body, user_subject_selector)
+    if subject is None:
+        return None
+    slugs: list[str] = (
+        [edge_plugin_slug] if edge_plugin_slug else candidate_plugin_slugs
+    )
+    if not slugs:
+        return None
+
+    matches: set[str] = set()
+    async with actions.ImbiClient() as client:
+        for slug in slugs:
+            user_id = await client.find_user_by_identity(slug, subject)
+            if user_id is not None:
+                matches.add(user_id)
+
+    if len(matches) > 1:
+        LOGGER.error(
+            'Identity subject %r resolved to multiple Imbi users via '
+            'plugins %r: %r — passing user_id=None',
+            subject,
+            slugs,
+            sorted(matches),
+        )
+        return None
+    return next(iter(matches), None)
 
 
 async def _extract_json_body(request: fastapi.Request) -> object:
