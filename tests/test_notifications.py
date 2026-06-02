@@ -608,30 +608,39 @@ class ProcessNotificationTests(helpers.TestCase):
         self.assertIsNone(ctx.actor_user_id)
 
     async def test_connected_plugin_options_reach_context(self) -> None:
-        encrypted = TokenEncryption.get_instance().encrypt(
-            json.dumps({'api_token': 's3cret'})
-        )
-        await self._attach_plugin(
-            'stub-creds',
-            plugin_configuration=encrypted,
-            options={'host': 'example.ghe.com', 'flavor': 'ghec'},
-        )
-        await self._add_rule(handler='stub-creds#do_thing')
-        body = {'repo': {'id': self.ext_id}}
-        response = await self._post(self.webhook_id, body)
-        self.assertEqual(202, response.status_code)
-        self.assertEqual(1, len(ACTION_CALLS))
-        ctx = typing.cast('plugin_base.PluginContext', ACTION_CALLS[0]['ctx'])
-        by_slug = {sp.slug: sp for sp in ctx.service_plugins}
-        self.assertIn('stub-creds', by_slug)
-        self.assertEqual(
-            {'host': 'example.ghe.com', 'flavor': 'ghec'},
-            by_slug['stub-creds'].options,
-        )
-        # The non-secret options surface, never the credential blob.
-        for sp in ctx.service_plugins:
-            self.assertNotIn('plugin_configuration', sp.options)
-            self.assertNotIn('api_token', sp.options)
+        with self.override_environment(
+            IMBI_AUTH_ENCRYPTION_KEY=fernet.Fernet.generate_key().decode()
+        ):
+            TokenEncryption.reset_instance()
+            try:
+                encrypted = TokenEncryption.get_instance().encrypt(
+                    json.dumps({'api_token': 's3cret'})
+                )
+                await self._attach_plugin(
+                    'stub-creds',
+                    plugin_configuration=encrypted,
+                    options={'host': 'example.ghe.com', 'flavor': 'ghec'},
+                )
+                await self._add_rule(handler='stub-creds#do_thing')
+                body = {'repo': {'id': self.ext_id}}
+                response = await self._post(self.webhook_id, body)
+                self.assertEqual(202, response.status_code)
+                self.assertEqual(1, len(ACTION_CALLS))
+                ctx = typing.cast(
+                    'plugin_base.PluginContext', ACTION_CALLS[0]['ctx']
+                )
+                by_slug = {sp.slug: sp for sp in ctx.service_plugins}
+                self.assertIn('stub-creds', by_slug)
+                self.assertEqual(
+                    {'host': 'example.ghe.com', 'flavor': 'ghec'},
+                    by_slug['stub-creds'].options,
+                )
+                # The non-secret options surface, never the credential blob.
+                for sp in ctx.service_plugins:
+                    self.assertNotIn('plugin_configuration', sp.options)
+                    self.assertNotIn('api_token', sp.options)
+            finally:
+                TokenEncryption.reset_instance()
 
     async def test_handler_called_for_each_matching_project(self) -> None:
         await self._add_rule(filter_expression='true')
