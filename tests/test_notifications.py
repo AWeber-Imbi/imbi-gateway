@@ -1423,7 +1423,7 @@ class _FakeBodyRequest:
         return self._raw
 
 
-class Utf8SanitizationTests(unittest.IsolatedAsyncioTestCase):
+class Utf8SanitizationTests(helpers.TestCase):
     def test_replaces_lone_surrogate_in_string(self) -> None:
         cleaned = typing.cast('str', _sanitize_utf8('hi \ud83d there'))
         cleaned.encode('utf-8')  # must not raise
