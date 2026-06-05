@@ -995,7 +995,8 @@ async def _record_and_build_filter_context(  # noqa: PLR0913 - required event fi
     - ``type`` — resolved event type (e.g. the ``X-GitHub-Event`` value)
     - ``third_party_service`` — service slug
     - ``attributed_to`` — resolved Imbi user (``''`` when unattributed)
-    - ``metadata.headers`` — request headers, sensitive values redacted
+    - ``metadata.headers`` — request headers, keys lower-cased and
+      sensitive values redacted
     - ``payload`` — the webhook body
 
     Per-row identity (``id``, ``project_id``, ``recorded_at``) is omitted:
