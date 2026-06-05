@@ -1336,7 +1336,7 @@ class IngestSbomConfigTests(helpers.TestCase):
 
     def test_sbom_selector_pointer(self) -> None:
         config = actions.IngestSbomConfig.model_validate_json(
-            '{"version_expression": "version",'
+            '{"version_expression": "payload.version",'
             ' "sbom_selector": "/payload/sbom"}'
         )
         self.assertEqual(str(config.sbom_selector), '/payload/sbom')
