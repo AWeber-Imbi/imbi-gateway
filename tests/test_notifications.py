@@ -643,6 +643,19 @@ class ProcessNotificationTests(helpers.TestCase):
             ['r'],
         )
 
+    async def _set_project_edge_secret(
+        self, project_id: str, secret: str
+    ) -> None:
+        """Encrypt ``secret`` onto a specific project's EXISTS_IN edge."""
+        enc = TokenEncryption.get_instance().encrypt(secret)
+        await self.g.execute(
+            'MATCH (:Project {{id: {pid}}})'
+            '      -[ei:EXISTS_IN {{identifier: {ext_id}}}]->()'
+            ' SET ei.webhook_secret_enc = {enc} RETURN 1 AS r',
+            {'pid': project_id, 'ext_id': self.ext_id, 'enc': enc},
+            ['r'],
+        )
+
     async def _post_raw(
         self, raw: bytes, headers: dict[str, str]
     ) -> httpx.Response:
@@ -760,6 +773,52 @@ class ProcessNotificationTests(helpers.TestCase):
                 )
                 self.assertEqual(204, resp.status_code)
                 self.assertEqual([], ACTION_CALLS)
+            finally:
+                TokenEncryption.reset_instance()
+
+    async def test_multi_project_divergent_secret_fails_closed(self) -> None:
+        # When external_id fans out to two projects with different
+        # secrets, a signature valid for only one edge must not let the
+        # delivery through: every secret-bearing edge has to verify, so
+        # acceptance is not dependent on row order.
+        with self.override_environment(
+            IMBI_AUTH_ENCRYPTION_KEY=fernet.Fernet.generate_key().decode()
+        ):
+            TokenEncryption.reset_instance()
+            try:
+                second_id = await self._create_extra_project()
+                await self._set_edge_secret('whsec')
+                await self._set_project_edge_secret(second_id, 'other-secret')
+                await self._add_rule(filter_expression='true')
+                raw = json.dumps({'repo': {'id': self.ext_id}}).encode()
+                # Signed only for the first project's secret.
+                resp = await self._post_raw(
+                    raw, {'X-PagerDuty-Signature': self._sign('whsec', raw)}
+                )
+                self.assertEqual(204, resp.status_code)
+                self.assertEqual([], ACTION_CALLS)
+            finally:
+                TokenEncryption.reset_instance()
+
+    async def test_multi_project_all_secrets_verify_accepted(self) -> None:
+        # Same external_id, two projects, the request is signed with the
+        # shared secret carried by every edge: the delivery is accepted
+        # and fans out to both projects.
+        with self.override_environment(
+            IMBI_AUTH_ENCRYPTION_KEY=fernet.Fernet.generate_key().decode()
+        ):
+            TokenEncryption.reset_instance()
+            try:
+                second_id = await self._create_extra_project()
+                await self._set_edge_secret('whsec')
+                await self._set_project_edge_secret(second_id, 'whsec')
+                await self._add_rule(filter_expression='true')
+                raw = json.dumps({'repo': {'id': self.ext_id}}).encode()
+                resp = await self._post_raw(
+                    raw, {'X-PagerDuty-Signature': self._sign('whsec', raw)}
+                )
+                self.assertEqual(202, resp.status_code)
+                self.assertEqual(2, len(ACTION_CALLS))
             finally:
                 TokenEncryption.reset_instance()
 

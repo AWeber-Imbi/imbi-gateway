@@ -481,10 +481,13 @@ async def _resolve_project_and_verify(
 
     Matches ``(:Project)-[:EXISTS_IN {identifier}]->(:tps)`` and returns
     the rows. Returns ``None`` -- meaning the caller should drop the
-    delivery -- when no project matches, or when the matched edge carries
+    delivery -- when no project matches, or when any matched edge carries
     a webhook signing secret and the request's signature does not verify
-    against it (parse-then-verify, fail closed). TPS that don't sign
-    deliveries store no secret and pass straight through.
+    against it (parse-then-verify, fail closed). When ``external_id``
+    fans out to multiple projects, every secret-bearing edge must verify
+    against the same request body, so acceptance is not row-order
+    dependent. TPS that don't sign deliveries store no secret and pass
+    straight through.
     """
     project_records: list[dict[str, typing.Any]] = await db.execute(
         'MATCH (p:Project)'
@@ -511,17 +514,18 @@ async def _resolve_project_and_verify(
             },
         )
         return None
-    secret_enc = graph.parse_agtype(
-        project_records[0].get('webhook_secret_enc')
-    )
-    if secret_enc and not _verify_webhook_signature(
-        secret_enc=str(secret_enc),
-        raw_body=await request.body(),
-        signature_header=request.headers.get('x-pagerduty-signature'),
-        webhook_id=webhook_id,
-        tps_slug=tps_slug,
-    ):
-        return None
+    raw_body = await request.body()
+    signature_header = request.headers.get('x-pagerduty-signature')
+    for record in project_records:
+        secret_enc = graph.parse_agtype(record.get('webhook_secret_enc'))
+        if secret_enc and not _verify_webhook_signature(
+            secret_enc=str(secret_enc),
+            raw_body=raw_body,
+            signature_header=signature_header,
+            webhook_id=webhook_id,
+            tps_slug=tps_slug,
+        ):
+            return None
     return project_records
 
 
