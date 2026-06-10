@@ -1153,15 +1153,10 @@ class DeliveryRecorder:
         """
         if not records:
             return
-        # ``version`` is suppressed for basedpyright because
-        # imbi-common 2.10.0 (currently the published version this
-        # repo lints against) has no such field on ``Event``; the
-        # local imbi-common adds it for the events_latest two-phase
-        # write. Remove the ignore once the gateway dep is bumped to
-        # the imbi-common release that ships the field. (Pydantic's
-        # default ``extra='ignore'`` means the kwarg is safely dropped
-        # at runtime when running against 2.10.0 — but the
-        # webhook-history feature requires the new field to function.)
+        # ``version`` distinguishes the phase-1 row (0) from the phase-2
+        # reinsert (1) so events_latest collapses to the populated
+        # disposition. The field ships in the imbi-common revision this
+        # repo pins for the webhook-history feature.
         events = [
             models.Event(
                 project_id=str(graph.parse_agtype(record['project_id'])),
@@ -1180,7 +1175,7 @@ class DeliveryRecorder:
                     'handlers': [],
                 },
                 payload=payload,
-                version=0,  # type: ignore[call-arg]
+                version=0,
             )
             for record in records
         ]
@@ -1200,8 +1195,7 @@ class DeliveryRecorder:
         """Insert phase-2 rows that backfill handler outcomes."""
         if not self._events:
             return
-        # See the note in ``record_received`` about the ``version``
-        # ignore.
+        # ``version=1`` marks the phase-2 reinsert; see ``record_received``.
         phase2 = [
             models.Event(
                 id=event.id,
@@ -1218,7 +1212,7 @@ class DeliveryRecorder:
                     ],
                 },
                 payload=event.payload,
-                version=1,  # type: ignore[call-arg]
+                version=1,
             )
             for project_id, event in self._events.items()
         ]
